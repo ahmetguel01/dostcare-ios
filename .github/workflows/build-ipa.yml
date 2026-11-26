@@ -15,6 +15,44 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Fix known Swift issues in ContentView.swift
+        run: |
+          python3 - << 'EOF'
+          from pathlib import Path
+
+          p = Path("DostCareiOS/ContentView.swift")
+          if p.exists():
+              text = p.read_text(encoding="utf-8")
+
+              # 1) Fix canAddPhotoOutput() -> canAddOutput(...)
+              text = text.replace("self.session.canAddPhotoOutput()", "self.session.canAddOutput(photoOutput)")
+              text = text.replace("session.canAddPhotoOutput()", "session.canAddOutput(photoOutput)")
+
+              # 2) Fix guard ... else { return } inside SwiftUI ViewBuilder
+              lines = text.splitlines()
+              fixed_lines = []
+              for line in lines:
+                  if "guard " in line and " else { return }" in line:
+                      indent = line[:len(line) - len(line.lstrip(" "))]
+                      cond = line.strip()
+                      # Extract condition between 'guard ' and ' else { return }'
+                      inner = cond[len("guard "):-len(" else { return }")].strip()
+                      if inner.startswith("!"):
+                          neg_cond = inner[1:].strip()
+                          if neg_cond.startswith("(") and neg_cond.endswith(")"):
+                              neg_cond = neg_cond[1:-1].strip()
+                          fixed_lines.append(f"{indent}if {neg_cond} {{")
+                      else:
+                          fixed_lines.append(f"{indent}if !({inner}) {{")
+                  else:
+                      fixed_lines.append(line)
+
+              p.write_text("\n".join(fixed_lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8")
+              print("Updated ContentView.swift")
+          else:
+              print("ContentView.swift not found")
+          EOF
+
       - name: Create project.yml
         run: |
           cat << 'EOF' > project.yml
@@ -31,8 +69,7 @@ jobs:
                 - path: DostCareiOS
               settings:
                 base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.dostcare.app
-                  INFOPLIST_FILE: DostCareiOS/Info.plist
+                  PRODUCT_BUNDLE_IDENTIFIER: com.dostcare.ios
                   ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   CODE_SIGN_STYLE: Manual
                   DEVELOPMENT_TEAM: ""
@@ -47,6 +84,7 @@ jobs:
 
       - name: Build unsigned app and package IPA
         run: |
+          set -e
           xcodebuild \
             -project DostCareiOS.xcodeproj \
             -scheme DostCareiOS \
@@ -65,8 +103,7 @@ jobs:
 
           mkdir -p build/ipa/Payload
           cp -R "$APP_PATH" build/ipa/Payload/
-          cd build/ipa
-          zip -r -y ../../DostCare.ipa Payload
+          (cd build/ipa && zip -r -y ../../DostCare.ipa Payload)
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
