@@ -15,44 +15,6 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Patch ContentView.swift safely
-        run: |
-          python3 - << 'EOF'
-          from pathlib import Path
-          import re
-
-          path = Path("DostCareiOS/ContentView.swift")
-          if path.exists():
-              text = path.read_text(encoding="utf-8")
-
-              # 1) Hatalı canAddPhotoOutput() çağrısını temizle
-              lines = []
-              for line in text.splitlines():
-                  s = line.strip()
-                  if "canAddPhotoOutput()" in s or "else { return }" in s or (s.startswith("guard ") and "return" in s):
-                      indent = line[:len(line) - len(line.lstrip(" "))]
-                      lines.append(f"{indent}// patched invalid Swift/ViewBuilder statement")
-                  else:
-                      lines.append(line)
-              text = "\n".join(lines) + "\n"
-
-              # 2) Button("Kaydı Ekle") { ... } ve Button("Notu Kaydet") { ... } bloklarını güvenli hale getir
-              for label in ["Kaydı Ekle", "Notu Kaydet"]:
-                  pattern = re.compile(
-                      rf'(Button\(\s*"{re.escape(label)}"\s*\)\s*\{{)(.*?)(\n[ \t]*\}})',
-                      re.DOTALL
-                  )
-                  def repl(m):
-                      head, body, tail = m.group(1), m.group(2), m.group(3)
-                      # Blok içinde return veya guard varsa güvenli hale getir
-                      safe_body = re.sub(r'\breturn\b', '/* return */', body)
-                      return f"{head}{safe_body}{tail}"
-                  text = pattern.sub(repl, text)
-
-              path.write_text(text, encoding="utf-8")
-              print("Patched ContentView.swift cleanly.")
-          EOF
-
       - name: Create project.yml
         run: |
           cat << 'EOF' > project.yml
