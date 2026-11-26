@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-ipa:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,43 +22,55 @@ jobs:
           options:
             bundleIdPrefix: com.dostcare
             deploymentTarget:
-              iOS: "16.0"
+              iOS: "15.0"
           targets:
             DostCareiOS:
               type: application
               platform: iOS
               sources:
                 - path: DostCareiOS
-              info:
-                path: DostCareiOS/Info.plist
               settings:
                 base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.dostcare.ios
+                  PRODUCT_BUNDLE_IDENTIFIER: com.dostcare.app
+                  INFOPLIST_FILE: DostCareiOS/Info.plist
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   CODE_SIGN_STYLE: Manual
                   DEVELOPMENT_TEAM: ""
                   CODE_SIGN_IDENTITY: ""
-                  CODE_SIGNING_REQUIRED: NO
-                  CODE_SIGNING_ALLOWED: NO
+                  PROVISIONING_PROFILE_SPECIFIER: ""
+                  IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+                  SWIFT_VERSION: "5.9"
           EOF
 
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build unsigned IPA archive
+      - name: Build unsigned app and package IPA
         run: |
-          xcodebuild -project DostCareiOS.xcodeproj \
+          xcodebuild \
+            -project DostCareiOS.xcodeproj \
             -scheme DostCareiOS \
-            -sdk iphoneos \
             -configuration Release \
-            archive -archivePath build/DostCareiOS.xcarchive \
-            CODE_SIGNING_ALLOWED=NO
+            -sdk iphoneos \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=NO \
+            build
+
+          APP_PATH=$(find build/DerivedData/Build/Products/Release-iphoneos -name "*.app" -maxdepth 1 | head -n 1)
+          echo "Found app at: $APP_PATH"
+          test -n "$APP_PATH"
 
           mkdir -p build/ipa/Payload
-          cp -R build/DostCareiOS.xcarchive/Products/Applications/DostCareiOS.app build/ipa/Payload/
-          cd build/ipa && zip -r ../../DostCare_Unsigned.ipa Payload
+          cp -R "$APP_PATH" build/ipa/Payload/
+          cd build/ipa
+          zip -r -y ../../DostCare.ipa Payload
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: DostCare-iOS-IPA
-          path: DostCare_Unsigned.ipa
+          path: DostCare.ipa
+          if-no-files-found: error
