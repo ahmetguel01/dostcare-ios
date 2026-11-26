@@ -1,4 +1,4 @@
-﻿import SwiftUI
+import SwiftUI
 import AVFoundation
 import Vision
 import AudioToolbox
@@ -39,6 +39,11 @@ struct AppStateData: Codable {
     var meds: [MedItem]
     var logs: [String]
     var compNotes: [String]
+}
+
+struct AlertMsg: Identifiable {
+    let id = UUID()
+    let text: String
 }
 
 enum SafetyNotice {
@@ -127,10 +132,10 @@ final class CameraBarcodeController: NSObject, ObservableObject, AVCapturePhotoC
                 return
             }
             self.session.addInput(input)
-            if self.session.canAddPhotoOutput() {
-                self.session.addPhotoOutput(self.photoOutput)
+            if self.session.canAddOutput(self.photoOutput) {
+                self.session.addOutput(self.photoOutput)
             }
-            if self.session.canAddMetadataOutput() {
+            if self.session.canAddOutput(self.metadataOutput) {
                 self.session.addMetadataOutput(self.metadataOutput)
                 self.metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
                 self.metadataOutput.metadataObjectTypes = [.ean13, .ean8, .code128, .qr, .dataMatrix]
@@ -589,17 +594,26 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             TextField("Ölçüm / Değer (örn. 135/85)", text: $logVal).textFieldStyle(.roundedBorder)
             TextField("Not", text: $logNote).textFieldStyle(.roundedBorder)
-            Button("Kaydı Ekle") {
-                guard !logVal.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                let entry = "[\(nowStamp())] \(logCat) -> \(logVal.trim()) | \(logNote.trim())"
-                logs.insert(entry, at: 0)
-                checkCriticalReading(val: logVal.trim())
-                logVal = ""; logNote = ""
-                persist()
+
+            Button(action: {
+                let trimmedVal = logVal.trimmingCharacters(in: .whitespaces)
+                if !trimmedVal.isEmpty {
+                    let entry = "[\(nowStamp())] \(logCat) -> \(trimmedVal) | \(logNote.trimmingCharacters(in: .whitespaces))"
+                    logs.insert(entry, at: 0)
+                    checkCriticalReading(val: trimmedVal)
+                    logVal = ""
+                    logNote = ""
+                    persist()
+                }
+            }) {
+                Text("Kaydı Ekle")
+                    .font(.system(size: accessibleMode ? 16 : 14, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
             }
-            .font(.system(size: accessibleMode ? 16 : 14, weight: .bold))
-            .frame(maxWidth: .infinity).padding(.vertical, 10)
-            .background(Color.blue).foregroundColor(.white).cornerRadius(10)
 
             List(logs, id: \.self) { row in
                 Text(row).font(.system(size: accessibleMode ? 15 : 13))
@@ -623,15 +637,23 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             TextField("Refakatçi / Doktor Notu", text: $compText).textFieldStyle(.roundedBorder)
-            Button("Notu Kaydet") {
-                guard !compText.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                compNotes.insert("[\(nowStamp()) | \(compBy)] \(compType): \(compText.trim())", at: 0)
-                compText = ""
-                persist()
+
+            Button(action: {
+                let trimmedNote = compText.trimmingCharacters(in: .whitespaces)
+                if !trimmedNote.isEmpty {
+                    compNotes.insert("[\(nowStamp()) | \(compBy)] \(compType): \(trimmedNote)", at: 0)
+                    compText = ""
+                    persist()
+                }
+            }) {
+                Text("Notu Kaydet")
+                    .font(.system(size: accessibleMode ? 16 : 14, weight: .bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color(red: 0.06, green: 0.46, blue: 0.43))
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
             }
-            .font(.system(size: accessibleMode ? 16 : 14, weight: .bold))
-            .frame(maxWidth: .infinity).padding(.vertical, 10)
-            .background(Color(red: 0.06, green: 0.46, blue: 0.43)).foregroundColor(.white).cornerRadius(10)
 
             List(compNotes, id: \.self) { row in
                 Text(row).font(.system(size: accessibleMode ? 15 : 13))
@@ -714,12 +736,15 @@ struct ContentView: View {
                         showScannerSheet = false
                     }
                     .font(.system(size: 16, weight: .bold))
-                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                    .background(Color.green).foregroundColor(.white).cornerRadius(10)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color(red: 0.06, green: 0.46, blue: 0.43))
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
                 .padding()
             }
-            .navigationTitle("Kamera & Barkod")
+            .navigationTitle("Barkod ve İlaç Tarama")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Kapat") {
@@ -734,88 +759,119 @@ struct ContentView: View {
     private var profileSheet: some View {
         NavigationView {
             Form {
-                Section("Hasta & Acil Yakını") {
-                    TextField("Adı Soyadı", text: $patientName)
-                    TextField("Yaşı", text: $patientAge)
-                    TextField("Acil Yakını", text: $emergencyContact)
+                Section(header: Text("Hasta Bilgileri")) {
+                    TextField("Ad Soyad", text: $patientName)
+                    TextField("Yaş", text: $patientAge).keyboardType(.numberPad)
+                    TextField("Acil Durum Yakını / Telefon", text: $emergencyContact)
                 }
-                Section("Uyarı") {
-                    Text(SafetyNotice.text(for: lang))
-                        .foregroundColor(.red)
-                        .font(.footnote)
-                }
-            }
-            .navigationTitle("Profil")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Kaydet") {
+                Section {
+                    Button("Kaydet ve Kapat") {
                         persist()
                         showProfileSheet = false
                     }
                 }
             }
+            .navigationTitle("Profil")
         }
     }
 
-    private func applyBarcodeCode(_ raw: String) {
-        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !code.isEmpty else { return }
-        if let hit = catalog[code] {
+    private func foodLabel(_ code: String) -> String {
+        switch code {
+        case "FASTING": return "Aç Karnına"
+        case "WITH_MEAL": return "Yemekle Birlikte"
+        default: return "Tok Karnına"
+        }
+    }
+
+    private func nowStamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "dd.MM HH:mm"
+        return f.string(from: Date())
+    }
+
+    private func todayKey() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
+    private func currentHHMM() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: Date())
+    }
+
+    private func alarmScript(_ item: MedItem, isTest: Bool) -> String {
+        let prefix = isTest ? "Test alarmı: " : "İlaç vakti: "
+        return "\(prefix)\(item.name). \(foodLabel(item.foodCode))."
+    }
+
+    private func speakSummary() {
+        let pending = meds.filter { !$0.taken }.map { $0.name }
+        let msg = pending.isEmpty ? "Bugünkü tüm ilaçlar içilmiş görünüyor." : "Bekleyen ilaçlar: \(pending.joined(separator: ", "))."
+        speaker.speak(msg, lang: lang, muted: voiceMuted)
+    }
+
+    private func applyBarcodeCode(_ rawCode: String) {
+        let clean = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let hit = catalog[clean] {
             medName = hit.name
-            scanDailyCount = hit.dailyCount
             medTimes = hit.defaultTime
             medFood = hit.foodCode
+            scanDailyCount = hit.dailyCount
             medDays = "\(hit.days)"
             medRx = hit.rx
-            scanResultText = "Tanındı: \(hit.name) — Günde \(hit.dailyCount) kez"
-        } else {
-            let cnt = code.hasSuffix("3") ? 3 : (code.hasSuffix("2") ? 2 : 1)
-            scanDailyCount = cnt
-            if medName.trimmingCharacters(in: .whitespaces).isEmpty { medName = "İlaç (\(code))" }
-            scanResultText = "Kod okundu: Günde \(cnt) kez"
+            scanResultText = "Katalogdan eşleşti: \(hit.name)"
+        } else if !clean.isEmpty {
+            scanResultText = "Kod kaydedildi: \(clean)"
         }
     }
 
     private func saveMedForm() {
-        let cleanName = medName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanName = medName.trimmingCharacters(in: .whitespaces)
         guard !cleanName.isEmpty else { return }
-        let parts = medTimes.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let sched = parts.isEmpty ? "09:00" : parts.joined(separator: ", ")
-        let primary = parts.first ?? "09:00"
-        let daysVal = max(0, Int(medDays) ?? 14)
-        let dailyVal = max(1, parts.count)
+        let cleanTimes = medTimes.trimmingCharacters(in: .whitespaces).isEmpty ? "09:00" : medTimes.trimmingCharacters(in: .whitespaces)
+        let firstTime = cleanTimes.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "09:00"
+        let d = max(0, Int(medDays) ?? 14)
+        let count = max(1, cleanTimes.components(separatedBy: ",").count)
 
-        if let idx = editingIndex, idx < meds.count {
+        if let idx = editingIndex, meds.indices.contains(idx) {
             meds[idx].name = cleanName
-            meds[idx].time = primary
-            meds[idx].doseTimes = sched
+            meds[idx].time = firstTime
+            meds[idx].doseTimes = cleanTimes
             meds[idx].foodCode = medFood
-            meds[idx].days = daysVal
-            meds[idx].dailyCount = dailyVal
+            meds[idx].days = d
+            meds[idx].dailyCount = count
             meds[idx].rx = medRx
             editingIndex = nil
         } else {
-            meds.append(MedItem(name: cleanName, time: primary, doseTimes: sched, foodCode: medFood, days: daysVal, dailyCount: dailyVal, barcode: barcodeInput, photoName: cam.lastPhotoName, rx: medRx, taken: false, lastAlertDate: "", lastTakenDate: ""))
+            let item = MedItem(
+                name: cleanName,
+                time: firstTime,
+                doseTimes: cleanTimes,
+                foodCode: medFood,
+                days: d,
+                dailyCount: count,
+                barcode: barcodeInput,
+                photoName: cam.lastPhotoName,
+                rx: medRx,
+                taken: false,
+                lastAlertDate: "",
+                lastTakenDate: ""
+            )
+            meds.append(item)
         }
         persist()
-        speaker.speak("\(cleanName) kaydedildi.", lang: lang, muted: voiceMuted)
     }
 
     private func toggleTaken(id: String, forceTaken: Bool?) {
         guard let idx = meds.firstIndex(where: { $0.id == id }) else { return }
-        let today = dayStamp()
         let nextTaken = forceTaken ?? !meds[idx].taken
-        if nextTaken && !meds[idx].taken {
-            meds[idx].taken = true
-            if meds[idx].lastTakenDate != today {
-                meds[idx].lastTakenDate = today
-                if meds[idx].days > 0 { meds[idx].days -= 1 }
-            }
-        } else if !nextTaken && meds[idx].taken {
-            meds[idx].taken = false
-            if meds[idx].lastTakenDate == today {
-                meds[idx].lastTakenDate = ""
-                meds[idx].days += 1
+        meds[idx].taken = nextTaken
+        if nextTaken {
+            meds[idx].lastTakenDate = todayKey()
+            if meds[idx].days > 0 {
+                meds[idx].days -= 1
             }
         }
         persist()
@@ -823,81 +879,73 @@ struct ContentView: View {
 
     private func snoozeMed(id: String) {
         guard let idx = meds.firstIndex(where: { $0.id == id }) else { return }
-        let snoozeDate = Date().addingTimeInterval(300)
-        let f = DateFormatter(); f.dateFormat = "HH:mm"
-        let s = f.string(from: snoozeDate)
-        meds[idx].time = s
-        meds[idx].doseTimes = s
-        meds[idx].lastAlertDate = ""
-        persist()
+        let cal = Calendar.current
+        if let nextDate = cal.date(byAdding: .minute, value: 5, to: Date()) {
+            let f = DateFormatter()
+            f.dateFormat = "HH:mm"
+            meds[idx].time = f.string(from: nextDate)
+            persist()
+        }
     }
 
     private func checkDueAlarms() {
-        let f = DateFormatter(); f.dateFormat = "HH:mm"
-        let hhmm = f.string(from: Date())
-        let td = dayStamp()
-        for idx in meds.indices {
-            if meds[idx].taken || meds[idx].lastAlertDate == td { continue }
-            let slots = meds[idx].doseTimes.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            if slots.contains(hhmm) {
-                meds[idx].lastAlertDate = td
-                persist()
+        let nowHM = currentHHMM()
+        let today = todayKey()
+        for i in meds.indices {
+            if meds[i].lastTakenDate != today && meds[i].taken {
+                meds[i].taken = false
+            }
+            let times = meds[i].doseTimes.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let due = times.contains(nowHM) || meds[i].time == nowHM
+            if due && !meds[i].taken && meds[i].lastAlertDate != "\(today)_\(nowHM)" {
+                meds[i].lastAlertDate = "\(today)_\(nowHM)"
                 speaker.playAlertChime()
-                speaker.speak(alarmScript(meds[idx], isTest: false), lang: lang, muted: voiceMuted)
-                activeAlarmMed = meds[idx]
+                speaker.speak(alarmScript(meds[i], isTest: false), lang: lang, muted: voiceMuted)
+                activeAlarmMed = meds[i]
+                persist()
                 break
             }
         }
     }
 
     private func checkCriticalReading(val: String) {
-        let nums = val.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
-        if let first = nums.first, first >= 160 || first >= 250 {
-            alertBannerText = "Kritik değer girildi: \(val)\nAcil yakın: \(emergencyContact)\n\n\(SafetyNotice.text(for: lang))"
+        let parts = val.split(separator: "/")
+        if parts.count == 2,
+           let sys = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+           let dia = Int(parts[1].trimmingCharacters(in: .whitespaces)),
+           (sys >= 180 || dia >= 120 || sys < 85) {
+            alertBannerText = "Kritik tansiyon değeri girildi (\(val)). Lütfen doktorunuzla veya acil durum kişisiyle iletişime geçin."
         }
     }
 
-    private func speakSummary() {
-        let takenCount = meds.filter { $0.taken }.count
-        let txt = "Bugün \(meds.count) ilaçtan \(takenCount) tanesi içildi. \(SafetyNotice.text(for: lang))"
-        speaker.speak(txt, lang: lang, muted: voiceMuted)
-        alertBannerText = txt
-    }
-
-    private func alarmScript(_ m: MedItem, isTest: Bool) -> String {
-        let prefix = isTest ? "Test uyarısı. " : "Dikkat, ilaç vaktiniz geldi. "
-        return "\(prefix)İlaç adı: \(m.name). Günde \(m.dailyCount) kez. Kullanım şekli: \(foodLabel(m.foodCode)). Saat \(m.doseTimes). Lütfen doktorunuzun verdiği reçete ile karşılaştırın."
-    }
-
-    private func foodLabel(_ code: String) -> String {
-        code == "FASTING" ? "Aç Karnına" : (code == "WITH_MEAL" ? "Yemekle Birlikte" : "Tok Karnına")
-    }
-
-    private func nowStamp() -> String {
-        let f = DateFormatter(); f.dateFormat = "dd.MM.yyyy HH:mm"; return f.string(from: Date())
-    }
-
-    private func dayStamp() -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f.string(from: Date())
-    }
-
     private func persist() {
-        let state = AppStateData(lang: lang, voiceMuted: voiceMuted, accessibleMode: accessibleMode, patientName: patientName, patientAge: patientAge, emergencyContact: emergencyContact, meds: meds, logs: logs, compNotes: compNotes)
-        if let data = try? JSONEncoder().encode(state) {
-            try? data.write(to: saveURL)
+        let payload = AppStateData(
+            lang: lang,
+            voiceMuted: voiceMuted,
+            accessibleMode: accessibleMode,
+            patientName: patientName,
+            patientAge: patientAge,
+            emergencyContact: emergencyContact,
+            meds: meds,
+            logs: logs,
+            compNotes: compNotes
+        )
+        if let encoded = try? JSONEncoder().encode(payload) {
+            try? encoded.write(to: saveURL)
         }
     }
 
     private func loadSaved() {
         guard let data = try? Data(contentsOf: saveURL),
-              let state = try? JSONDecoder().decode(AppStateData.self, from: data) else { return }
-        lang = state.lang; voiceMuted = state.voiceMuted; accessibleMode = state.accessibleMode
-        patientName = state.patientName; patientAge = state.patientAge; emergencyContact = state.emergencyContact
-        meds = state.meds; logs = state.logs; compNotes = state.compNotes
+              let decoded = try? JSONDecoder().decode(AppStateData.self, from: data) else { return }
+        lang = decoded.lang
+        voiceMuted = decoded.voiceMuted
+        accessibleMode = decoded.accessibleMode
+        patientName = decoded.patientName
+        patientAge = decoded.patientAge
+        emergencyContact = decoded.emergencyContact
+        if !decoded.meds.isEmpty { meds = decoded.meds }
+        logs = decoded.logs
+        compNotes = decoded.compNotes
     }
-}
-
-private struct AlertMsg: Identifiable {
-    let id = UUID()
-    let text: String
 }
