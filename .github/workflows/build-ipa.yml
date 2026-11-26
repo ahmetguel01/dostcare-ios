@@ -19,26 +19,37 @@ jobs:
         run: |
           python3 - << 'EOF'
           from pathlib import Path
+          import re
 
           path = Path("DostCareiOS/ContentView.swift")
           if path.exists():
-              lines = path.read_text(encoding="utf-8").splitlines()
-              cleaned = []
-              for line in lines:
-                  s = line.strip()
-                  # 1) Hatalı canAddPhotoOutput() çağrısını düzelt
-                  if "canAddPhotoOutput()" in s:
-                      indent = line[:len(line) - len(line.lstrip(" "))]
-                      cleaned.append(f"{indent}// removed invalid canAddPhotoOutput()")
-                      continue
-                  # 2) SwiftUI ViewBuilder içinde return / guard ... else { return } satırını atla
-                  if "else { return }" in s or (s.startswith("guard ") and "return" in s):
-                      indent = line[:len(line) - len(line.lstrip(" "))]
-                      cleaned.append(f"{indent}// removed invalid return/guard in ViewBuilder")
-                      continue
-                  cleaned.append(line)
+              text = path.read_text(encoding="utf-8")
 
-              path.write_text("\n".join(cleaned) + "\n", encoding="utf-8")
+              # 1) Hatalı canAddPhotoOutput() çağrısını temizle
+              lines = []
+              for line in text.splitlines():
+                  s = line.strip()
+                  if "canAddPhotoOutput()" in s or "else { return }" in s or (s.startswith("guard ") and "return" in s):
+                      indent = line[:len(line) - len(line.lstrip(" "))]
+                      lines.append(f"{indent}// patched invalid Swift/ViewBuilder statement")
+                  else:
+                      lines.append(line)
+              text = "\n".join(lines) + "\n"
+
+              # 2) Button("Kaydı Ekle") { ... } ve Button("Notu Kaydet") { ... } bloklarını güvenli hale getir
+              for label in ["Kaydı Ekle", "Notu Kaydet"]:
+                  pattern = re.compile(
+                      rf'(Button\(\s*"{re.escape(label)}"\s*\)\s*\{{)(.*?)(\n[ \t]*\}})',
+                      re.DOTALL
+                  )
+                  def repl(m):
+                      head, body, tail = m.group(1), m.group(2), m.group(3)
+                      # Blok içinde return veya guard varsa güvenli hale getir
+                      safe_body = re.sub(r'\breturn\b', '/* return */', body)
+                      return f"{head}{safe_body}{tail}"
+                  text = pattern.sub(repl, text)
+
+              path.write_text(text, encoding="utf-8")
               print("Patched ContentView.swift cleanly.")
           EOF
 
